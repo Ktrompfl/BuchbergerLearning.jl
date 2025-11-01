@@ -3,3 +3,11 @@
 *.jl.mem
 /docs/Manifest*.toml
 /docs/build/
+
+# Profiler data by PProf
+*.pb.gz
+
+# IDE specific files
+.idea/*
+.vscode/*
+.zed/*
