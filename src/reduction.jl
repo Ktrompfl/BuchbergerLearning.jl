@@ -142,7 +142,7 @@ function reduce!(
 
       # reduce lead term
       inc!(STATS, :additions)
-      f = submul!(f, div(lt(f, o), lt(g, o)), g)  # TODO: can provide tmp polynomial for efficiency
+      f = submul!(f, divexact(lt(f, o), lt(g, o)), g)  # TODO: can provide tmp polynomial for efficiency
     end
   end
 

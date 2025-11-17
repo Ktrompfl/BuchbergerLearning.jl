@@ -1,60 +1,69 @@
 
-using AbstractAlgebra
+using Oscar
 
-using Random: Random, SamplerTrivial
-using AbstractAlgebra.RandomExtensions: RandomExtensions, Make2, AbstractRNG
+import Base: show, +, -, *, ^, ==, inv, isone, iszero, isequal, one, zero,
+  deepcopy_internal, hash, length
 
-import AbstractAlgebra: parent_type, elem_type, base_ring, base_ring_type, parent,
-  is_domain_type,
-  is_exact_type, canonical_unit, isequal, divexact, zero!, mul!, add!,
-  get_cached!, is_unit, characteristic, Ring, RingElem
+# TODO: how to handle this correctly?
+import Oscar.AbstractAlgebra: MPolyBuildCtx, push_term!, finish, parent_type, elem_type,
+  base_ring_type,
+  base_ring, parent, is_domain_type, is_exact_type, symbols, number_of_variables, gens, gen,
+  internal_ordering, degrees, total_degree, is_gen, coefficients, exponent_vectors,
+  characteristic, is_unit, canonical_unit, divides, divexact, remove, valuation, zero!,
+  one!, mul!, add!, sub!, neg!, inv!, addmul!, submul!, coeff, monomial, term, exponent,
+  exponent_vector
 
-import Oscar: MonomialOrdering
+import Oscar: index_of_leading_term, default_ordering
 
-import Base:
-  show, +, -, *, ^, ==, inv, isone, iszero, one, zero, rand,
-  deepcopy_internal, hash
+export reduction_polynomial_ring
 
-const ReductionMPolyID = AbstractAlgebra.CacheDictType{MPolyRing,ReductionMPolyRing}()
-
-struct ReductionMPolyRing{T<:RingElement,R<:MPolyRing{T}} <: MPolyRing{T}
+mutable struct ReductionMPolyRing{T<:RingElement,R<:MPolyRing{T}} <: MPolyRing{T}
   ring::R
-  ordering::MonomialOrdering
+  ordering::MonomialOrdering{R}
 
-  function ReductionMPolyRing(R::MPolyRing, cached::Bool=false)
-    return get_cached!(
-      ReductionMPolyID, R, cached
+  function ReductionMPolyRing(
+    ring::R, ordering::MonomialOrdering{R}, cached::Bool=false
+  ) where {T<:RingElem,R<:MPolyRing{T}}
+    # get_cached! attaches a finalizer, which requires the struct to be mutable
+    return AbstractAlgebra.get_cached!(
+      ReductionMPolyID, (ring, ordering), cached
     ) do
-      new{elem_type(R),typeof(R)}(R)
-    end::ReductionMPolyRing{elem_type(R),typeof(R)}
+      new{T,R}(
+        ring, ordering
+      )
+    end::ReductionMPolyRing{T,R}
   end
 end
 
-mutable struct ReductionMPoly{T<:RingElement,P::MPolyRingElem{T}} <:
-               MPolyRingElem{T}
-  const parent::ReductionMPolyRing{T}
+const ReductionMPolyID = AbstractAlgebra.CacheDictType{
+  Tuple{MPolyRing,MonomialOrdering},ReductionMPolyRing
+}()
+
+mutable struct ReductionMPoly{T<:RingElement,P<:MPolyRingElem{T}} <: MPolyRingElem{T}
+  parent::ReductionMPolyRing{T}
   poly::P
   lead_index::Int
 end
 
 function ReductionMPoly(
   ring::ReductionMPolyRing{T}, poly::P
-) where {T<:RingElement,P::MPolyRingElem{T}}
-  idx = index_of_leading_term(poly, ring.ordering)
+) where {T<:RingElement,P<:MPolyRingElem{T}}
+  idx = iszero(poly) ? 0 : index_of_leading_term(poly, ring.ordering)  # lead index of 0 is undefined
   return ReductionMPoly(ring, poly, idx)
 end
 
 # build from terms
 
-mutable struct ReductionMPolyBuildCtx
+struct ReductionMPolyBuildCtx
   ring::ReductionMPolyRing
   builder::MPolyBuildCtx
-
-  ReductionMPolyBuildCtx(R::ReductionMPolyRing) = new(R, MPolyBuildCtx(R.ring))
 end
+
+MPolyBuildCtx(R::ReductionMPolyRing) = ReductionMPolyBuildCtx(R, MPolyBuildCtx(handle(R)))
 
 function push_term!(m::ReductionMPolyBuildCtx, c::RingElem, v::Vector{Int})
   push_term!(m.builder, c, v)
+  return m
 end
 
 function finish(m::ReductionMPolyBuildCtx)
@@ -64,12 +73,18 @@ end
 
 # Data type and parent object methods
 
+ordering(R::ReductionMPolyRing) = R.ordering
+handle(R::ReductionMPolyRing) = R.ring
+handle(f::ReductionMPoly) = f.poly
+
 parent_type(::Type{ReductionMPoly{T,P}}) where {T<:RingElement,P<:MPolyRingElem{T}} =
-  ReductionMPolyRing{T}  # FIXME
+  ReductionMPolyRing{T,parent_type(P)}
 
-elem_type(::Type{ReductionMPolyRing{T}}) where {T<:RingElement} = ReductionMPoly{T}  # FIXME
+elem_type(::Type{ReductionMPolyRing{T,P}}) where {T<:RingElement,P<:MPolyRing{T}} =
+  ReductionMPoly{T,elem_type(P)}
 
-base_ring_type(::Type{ConstPolyRing{T}}) where {T<:RingElement} = parent_type(T)  # FIXME
+base_ring_type(::Type{ReductionMPolyRing{T,P}}) where {T<:RingElement,P<:MPolyRingElem{T}} =
+  base_ring_type(P)
 
 base_ring(R::ReductionMPolyRing) = base_ring(R.ring)
 
@@ -81,213 +96,225 @@ is_domain_type(::Type{ReductionMPoly{T,P}}) where {T<:RingElement,P<:MPolyRingEl
 is_exact_type(::Type{ReductionMPoly{T,P}}) where {T<:RingElement,P<:MPolyRingElem{T}} =
   is_exact_type(P)
 
-hash(f::ReductionMPoly, h::UInt) = hash(f.poly, h)
+hash(f::ReductionMPoly, h::UInt) = hash(handle(f), h)
 
 deepcopy_internal(f::ReductionMPoly, dict::IdDict) =
-  ReductionMPoly(f.ring, deepcopy_internal(f.poly, dict), f.lead_index)
+  ReductionMPoly(parent(f), deepcopy_internal(handle(f), dict), f.lead_index)
 
 symbols(R::ReductionMPolyRing) = symbols(R.ring)
 
-number_of_variables(R::ReductionMPolyRing) = number_of_variables(R.ring)
+number_of_variables(R::ReductionMPolyRing) = number_of_variables(handle(R))
 
-gens(R::ReductionMPolyRing) = map(R, gens(R.ring))
+gens(R::ReductionMPolyRing) = map(R, gens(handle(R)))
 
-gen(R::ReductionMPolyRing, i::Int) = R(gen(R.ring, i))
+gen(R::ReductionMPolyRing, i::Int) = R(gen(handle(R), i))
 
-internal_ordering(R::ReductionMPolyRing) = internal_ordering(R.ring)
+internal_ordering(R::ReductionMPolyRing) = internal_ordering(handle(R))
 
-length(f::ReductionMPoly) = length(f.poly)
+length(f::ReductionMPoly) = length(handle(f))
 
-degrees(f::ReductionMPoly) = degrees(f.poly)
+degrees(f::ReductionMPoly) = degrees(handle(f))
 
-total_degree(f::ReductionMPoly) = total_degree(f.poly)
+total_degree(f::ReductionMPoly) = total_degree(handle(f))
 
-is_gen(f::ReductionMPoly) = is_gen(f.poly)
+is_gen(f::ReductionMPoly) = is_gen(handle(f))
 
-coefficients(f::ReductionMPoly) = coefficients(f.poly)
+coefficients(f::ReductionMPoly) = coefficients(handle(f))
 
-exponent_vectors(f::ReductionMPoly) = exponent_vectors(f.poly)
+exponent_vectors(f::ReductionMPoly) = exponent_vectors(handle(f))
 
 # TODO: monomials and terms would need a custom iterator type, but a generic version is provided
 
 # Basic manipulation
 
-characteristic(R::ReductionMPolyRing) = characteristic(R.ring)
+characteristic(R::ReductionMPolyRing) = characteristic(handle(R))
 
-zero(R::ReductionMPolyRing) = ReductionMPoly(R, zero(R.ring), 0)
+zero(R::ReductionMPolyRing) = ReductionMPoly(R, zero(handle(R)), 0)
 
-one(R::ReductionMPolyRing) = ReductionMPoly(R, one(R.ring), 1)
+one(R::ReductionMPolyRing) = ReductionMPoly(R, one(handle(R)), 1)
 
-iszero(f::ReductionMPoly) = iszero(f.poly)
+iszero(f::ReductionMPoly) = iszero(handle(f))
 
-isone(f::ReductionMPoly) = isone(f.poly)
+isone(f::ReductionMPoly) = isone(handle(f))
 
-is_unit(f::ReductionMPoly) = is_unit(f.poly)
+is_unit(f::ReductionMPoly) = is_unit(handle(f))
 
-canonical_unit(f::ReductionMPoly) = ReductionMPoly(f.parent, canonical_unit(f.poly), 1)
+canonical_unit(f::ReductionMPoly) = ReductionMPoly(parent(f), canonical_unit(handle(f)), 1)
 
 # String I/O
 
 function show(io::IO, f::ReductionMPoly)
-  show(io, f.poly)
+  show(io, handle(f))
 end
 
 # safe operations
 
 function -(f::ReductionMPoly)
-  return ReductionMPoly(f.parent, -f.poly)
+  return ReductionMPoly(parent(f), -handle(f))
 end
 
 function +(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return ReductionMPoly(f.parent, f.poly + g.poly)
+  return ReductionMPoly(parent(f), handle(f) + handle(g))
 end
 
 function -(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return ReductionMPoly(f.parent, f.poly - g.poly)
+  return ReductionMPoly(parent(f), handle(f) - handle(g))
 end
 
 function *(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return ReductionMPoly(f.parent, f.poly * g.poly)
+  return ReductionMPoly(parent(f), handle(f) * handle(g))
 end
 
 function ^(f::ReductionMPoly, e::Int)
-  return ReductionMPoly(f.parent, f.poly^e)
+  return ReductionMPoly(parent(f), handle(f)^e)
 end
 
 # comparison
 
 function ==(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return f.poly == g.poly
+  return handle(f) == handle(g)
 end
 
 function isequal(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return isequal(f.poly, g.poly)
+  return isequal(handle(f), handle(g))
 end
 
 # division
 
 function divides(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return divides(f.poly, g.poly)
+  return divides(handle(f), handle(g))
 end
 
 function divexact(f::ReductionMPoly, g::ReductionMPoly; check::Bool=true)
   check_parent(f, g)
-  return ReductionMPoly(f.parent, divexact(f.poly, g.poly; check=check))
+  return ReductionMPoly(parent(f), divexact(handle(f), handle(g); check=check))
 end
 
 function remove(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  (v, q) = remove(f.poly, q.poly)
-  return (v, ReductionMPoly(f.parent, q))
+  (v, q) = remove(handle(f), handle(g))
+  return (v, ReductionMPoly(parent(f), q))
 end
 
 function valuation(f::ReductionMPoly, g::ReductionMPoly)
   check_parent(f, g)
-  return valuation(f.poly, q.poly)
+  return valuation(handle(f), handle(g))
 end
 
 function divexact(f::ReductionMPoly, c::Integer)
-  return ReductionMPoly(f.parent, divexact(f, c))
+  return ReductionMPoly(parent(f), divexact(handle(f), c))
 end
 
 function divexact(f::ReductionMPoly, c::Rational)
-  return ReductionMPoly(f.parent, divexact(f, c))
+  return ReductionMPoly(parent(f), divexact(handle(f), c))
 end
 
-function divexact(f::ReductionMPoly{T}, c::T)
-  return ReductionMPoly(f.parent, divexact(f, c))
+function divexact(f::ReductionMPoly{T}, c::T) where {T<:RingElem}
+  return ReductionMPoly(parent(f), divexact(handle(f), c))
 end
 
 # inverse
 
 function inv(f::ReductionMPoly)
-  return ReductionMPoly(f.parent, inv(f.poly))
+  return ReductionMPoly(parent(f), inv(handle(f)))
 end
 
 # unsafe operations
 
 function zero!(f::ReductionMPoly)
-  f.poly = zero!(f.poly)
+  f.poly = zero!(handle(f))
   # lead index of 0 is undefined
   return f
 end
 
 function one!(f::ReductionMPoly)
-  f.poly = one!(f.poly)
+  f.poly = one!(handle(f))
   f.lead_index = 1
   return f
 end
 
+function _recompute_lead_index!(f::ReductionMPoly)
+  iszero(f) && return nothing  # lead index of 0 is undefined
+  f.lead_index = index_of_leading_term(handle(f), parent(f).ordering)
+end
+
 function mul!(f::ReductionMPoly, g::ReductionMPoly, h::ReductionMPoly)
-  f.poly = mul!(f.poly, g.poly, h.poly)
-  f.lead_index = index_of_leading_term(poly, f.parent.ordering)
+  f.poly = mul!(handle(f), handle(g), handle(h))
+  _recompute_lead_index!(f)
   return f
 end
 
 function add!(f::ReductionMPoly, g::ReductionMPoly, h::ReductionMPoly)
-  f.poly = add!(f.poly, g.poly, h.poly)
-  f.lead_index = index_of_leading_term(poly, f.parent.ordering)
+  f.poly = add!(handle(f), handle(g), handle(h))
+  _recompute_lead_index!(f)
   return f
 end
 
 function sub!(f::ReductionMPoly, g::ReductionMPoly, h::ReductionMPoly)
-  f.poly = sub!(f.poly, g.poly, h.poly)
-  f.lead_index = index_of_leading_term(poly, f.parent.ordering)
+  f.poly = sub!(handle(f), handle(g), handle(h))
+  _recompute_lead_index!(f)
   return f
 end
 
 function neg!(f::ReductionMPoly, g::ReductionMPoly)
-  f.poly = neg!(f.poly, g.poly)
+  f.poly = neg!(handle(f), handle(g))
   # lead index unchanged
   return f
 end
 
 function inv!(f::ReductionMPoly, g::ReductionMPoly)
-  f.poly = inv!(f.poly, g.poly)
-  f.lead_index = index_of_leading_term(poly, f.parent.ordering)
+  f.poly = inv!(handle(f), handle(g))
+  _recompute_lead_index!(f)
   return f
 end
 
 function addmul!(f::ReductionMPoly, g::ReductionMPoly, h::ReductionMPoly, t::ReductionMPoly)
-  f.poly = addmul!(f.poly, g.poly, h.poly, t.poly)
-  f.lead_index = index_of_leading_term(poly, f.parent.ordering)
+  f.poly = addmul!(handle(f), handle(g), handle(h), handle(t))
+  _recompute_lead_index!(f)
   return f
 end
 
 function submul!(f::ReductionMPoly, g::ReductionMPoly, h::ReductionMPoly, t::ReductionMPoly)
-  f.poly = submul!(f.poly, g.poly, h.poly, t.poly)
-  f.lead_index = index_of_leading_term(poly, f.parent.ordering)
+  f.poly = submul!(handle(f), handle(g), handle(h), handle(t))
+  _recompute_lead_index!(f)
   return f
 end
 
+# accessors
+
+function index_of_leading_term(f::ReductionMPoly, o::MonomialOrdering)
+  iszero(f) && error("index of leading term undefined for zero")
+  return o == ordering(parent(f)) ? f.lead_index : index_of_leading_term(handle(f), o)
+end
+
 function coeff(f::ReductionMPoly, n::Int)
-  return coeff(f.poly, n)
+  return coeff(handle(f), n)
 end
 
 function coeff(f::ReductionMPoly, exps::Vector{Int})
-  return coeff(f.poly, exps)
+  return coeff(handle(f), exps)
 end
 
 function monomial(f::ReductionMPoly, n::Int)
-  return ReductionMPoly(f.parent, monomial(f.poly, n), 1)
+  return ReductionMPoly(parent(f), monomial(handle(f), n), 1)
 end
 
-function term(f::MyMPoly{T}, n::Int) where {T<:RingElem}
-  return ReductionMPoly(f.parent, term(f.poly, n), 1)
+function term(f::ReductionMPoly, n::Int)
+  return ReductionMPoly(parent(f), term(handle(f), n), 1)
 end
 
 function exponent(f::ReductionMPoly, i::Int, j::Int)
-  return exponent(f.poly, i, j)
+  return exponent(handle(f), i, j)
 end
 
 function exponent_vector(f::ReductionMPoly, i::Int)
-  return exponent_vector(f.poly, i)
+  return exponent_vector(handle(f), i)
 end
 
 # function setcoeff!(a::MyMPoly, exps::Vector{Int}, c::S) where {S<:RingElement}
@@ -324,45 +351,40 @@ end
 
 # rand(R::ConstPolyRing, n::AbstractUnitRange{Int}) = rand(Random.default_rng(), R, n)
 
-# Promotion rules
+# promotion rules
 
-# promote_rule(::Type{ConstPoly{T}}, ::Type{ConstPoly{T}}) where {T<:RingElement} =
-#   ConstPoly{T}
+Base.promote_rule(
+  ::Type{ReductionMPoly{T,P}}, ::Type{ReductionMPoly{T,P}}
+) where {T<:RingElement,P<:MPolyRingElem{T}} = ReductionMPoly{T,P}
 
-# function promote_rule(::Type{ConstPoly{T}}, ::Type{U}) where {T<:RingElement,U<:RingElement}
-#   promote_rule(T, U) == T ? ConstPoly{T} : Union{}
-# end
+# polynomial constructors
 
-# # Constructors
+function (R::ReductionMPolyRing)()
+  return zero(R)
+end
 
-# function (R::ConstPolyRing{T})() where {T<:RingElement}
-#   p = R.ring()
-#   return SugarMPoly(R, p, total_degree(p))
-# end
+function (R::ReductionMPolyRing)(c::Integer)
+  return ReductionMPoly(R, handle(R)(c), 1)
+end
 
-# function (R::ConstPolyRing{T})(c::Integer) where {T<:RingElement}
-#   p = R.ring(c)
-#   return SugarMPoly(R, p, total_degree(p))
-# end
+function (R::ReductionMPolyRing{T})(c::T) where {T<:RingElement}
+  return ReductionMPoly(R, handle(R)(c), 1)
+end
 
-# # Needed to prevent ambiguity
-# function (R::SugarMPolyRing{T})(c::T) where {T<:Integer}
-#   p = R.ring(c)
-#   return ReductionMPoly(R, p)
-# end
+function (R::ReductionMPolyRing)(f::MPolyRingElem)
+  handle(R) != parent(f) && error("Unable to coerce element")
+  return ReductionMPoly(R, f)
+end
 
-# function (R::ReductionMPolyRing{T})(c::T) where {T<:RingElement}
-#   p = R.ring(c)
-#   return ReductionMPoly(R, p)
-# end
+function (R::ReductionMPolyRing{T})(f::ReductionMPoly{T}) where {T<:RingElement}
+  R != parent(f) && error("Unable to coerce element")
+  return f
+end
 
-# function (R::ReductionMPolyRing{T})(f::ReductionMPoly{T}) where {T<:RingElement}
-#   R != parent(f) && error("Unable to coerce element")
-#   return f
-# end
+# ring constructor
 
-# # Parent constructor
-
-# function reduction_polynomial_ring(R::MPolyRing, cached::Bool=true)
-#   return ReductionMPolyRing(R, cached)
-# end
+function reduction_polynomial_ring(
+  R::T, ordering::MonomialOrdering{T}=default_ordering(R), cached::Bool=true
+) where {T<:MPolyRing}
+  return ReductionMPolyRing(R, ordering, cached)
+end

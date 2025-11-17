@@ -6,6 +6,7 @@ using Oscar
 using Random  # note: for random ideals/polynomials from various distributions look into Distribution.jl
 using Base.ScopedValues
 
+include("rpoly.jl")
 include("polynomials.jl")
 include("elimination.jl")
 include("reduction.jl")
@@ -64,8 +65,12 @@ function spoly(f1::T, f2::T, o::MonomialOrdering) where {T<:MPolyRingElem}
   l1 = finish(push_term!(C, inv(lc(f1, o)), max.(e1, e2) .- e1))  # lcm(LM(f1), LM(f2)) / LT(f1)
   l2 = finish(push_term!(C, inv(lc(f2, o)), max.(e1, e2) .- e2))  # lcm(LM(f1), LM(f2)) / LT(f2)
 
+  # s = l1 * f1 - l2 * f2
+  l1 = mul!(l1, f1)
+  s = submul!(l1, l2, f2)
   inc!(STATS, :additions)
-  return l1 * f1 - l2 * f2
+
+  return s
 end
 
 @doc raw"""
@@ -104,19 +109,24 @@ function buchberger(
 ) where {T<:MPolyRingElem}
   is_global(o) || error("Ordering must be global")
 
+  # box all generators (cache leading indices w.r.t. monomial ordering)
+  S = reduction_polynomial_ring(base_ring(I), o)
+  I = map(S, gens(I))
+
   # TODO: glaze all polynomials in I for sugar / spice selection strategies
 
-  G = T[]  # generators
+  G = Vector{elem_type(S)}()  # generators
+  sizehint!(G, length(I))
+
   R = init_reducers()  # reducers
   Q = CriticalPair[]  # critical pairs
-  sizehint!(G, ngens(I))
 
   stats = Stats()
 
   # use scoped value so we don't have to pass down stats the entire call chain
   # warning: this is not thread safe, every thread needs its own scope
   @with STATS => stats begin
-    for g in gens(I)
+    for g in I
       iszero(g) && continue
 
       # update the critical pairs
@@ -155,8 +165,12 @@ function buchberger(
     stats.generator_max_degree_post_reduction = maximum(degree(g, o) for g in G)
   end
 
+  # unbox generators
+  S = handle(S)
+  G = map(handle, G)
+
   # build output
-  J = Oscar.IdealGens(base_ring(I), G, ordering)
+  J = Oscar.IdealGens(S, G, o)
   J.isGB = true
   J.isReduced = complete_reduction
 
