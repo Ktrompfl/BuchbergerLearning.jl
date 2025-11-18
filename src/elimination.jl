@@ -53,11 +53,11 @@ end
 struct GebauerMoellerInstallation <: EliminationStrategy end
 
 function update!(
-  S::GebauerMoellerInstallation, Q::Vector{Tuple{Int,Int}}, G::Vector{T}, f::T,
+  ::GebauerMoellerInstallation, Q::Vector{Tuple{Int,Int}}, G::Vector{T}, f::T,
   o::MonomialOrdering,
 ) where {T<:MPolyRingElem}
   @assert !iszero(f)
-  k = length(G) + 1
+  k = lastindex(G) + 1
   lf = lm(f, o)
 
   # TODO: persist these data structures in the strategy struct
@@ -75,26 +75,26 @@ function update!(
   l0 = length(Q)
 
   # B-criterion: drop (i,j) if LM(f) | lcm(LM(G[i]),LM(G[j])) and lcm(LM(f),LM(G[i])) != lcm(LM(G[i]),LM(G[j])) != lcm(LM(f),LM(G[j]))
-  filter!(Q) do (i, j)
+  filter!(Q) do pair
+    (i, j) = pair
     # note: if this becomes performance critical, allocations here can be easily removed by basic performing operations on exponent vectors
     l = lcm(lm(G[i], o), lm(G[j], o))
-    return !divides(lf, l) || H[i] == l || H[j] == l
+    return !reduces(lf, l, o) || H[i] == l || H[j] == l
   end
 
   # stats
-  inc!(STATS, :critical_pairs_discarded, length(Q) - l0)
+  inc!(STATS, :critical_pairs_discarded, l0 - length(Q))
   l0 = length(Q)
 
   # M-criterion: ignore (i, k) if H[i] is not minimal in H w.r.t. divisibility
   # F-criterion: ignore (i, k) if there exists j < i with H[j] = H[i]
-  for l in sort(keys(lcms); by=degree)
-    if !any(divides(l, m) for m in min_lcms)
+  for l in sort(collect(keys(lcms)); by=f -> degree(f, o))
+    if !any(reduces(m, l, o) for m in min_lcms)
       # l is minimal in H w.r.t. divisibility
       push!(min_lcms, l)
 
-      # TODO: verify this criterion is actually compatible with the Gebauer-Moeller criteria
       # product criterion: ignore (i, k) if LM(G[i]) and LM(f) are coprime
-      if !any(iscoprime(G[i], f, o) for i in lcms[p])
+      if !any(iscoprime(G[i], f, o) for i in lcms[l])
         # i is minimal with H[i] = l
         i = first(lcms[l])
 
