@@ -1,13 +1,17 @@
 name = "BuchbergerLearning"
 uuid = "d825c049-4a4c-479e-af9c-14b6e5d3b281"
-authors = ["Nicolaus Jacobsen <jacobsen@rptu.de>"]
 version = "0.1.0-DEV"
+authors = ["Nicolaus Jacobsen <jacobsen@rptu.de>"]
 
 [deps]
+BufferedStreams = "e1450e63-4bb3-523b-b2a4-4ffa8c0fd77d"
+Match = "7eb4fadd-790c-5f42-8a69-bfa0b872bfbf"
 Oscar = "f1435218-dba5-11e9-1e4d-f1a5fab5fc13"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [compat]
+BufferedStreams = "1.2.2"
+Match = "2.4.1"
 Oscar = "1.5.0"
 Random = "1.11.0"
 Test = "1.11.0"

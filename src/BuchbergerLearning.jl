@@ -1,7 +1,8 @@
 module BuchbergerLearning
 
-export buchberger
+export buchberger, gröbner_basis
 
+using Match
 using Oscar
 using Random  # note: for random ideals/polynomials from various distributions look into Distribution.jl
 using Base.ScopedValues
@@ -16,7 +17,7 @@ const CriticalPair = Tuple{Int,Int}
 
 Base.@kwdef mutable struct Stats
   # reductions
-  reductions_total::Int = 0
+  reductions_zero::Int = 0
   reductions_nonzero::Int = 0
 
   # critical pair selection
@@ -24,8 +25,6 @@ Base.@kwdef mutable struct Stats
   critical_pairs_created::Int = 0
   critical_pairs_selected::Int = 0
   critical_pairs_discarded::Int = 0
-
-  s_polynomials::Int = 0
 
   # generators
   generator_max_degree_pre_reduction::Int = 0
@@ -35,7 +34,7 @@ Base.@kwdef mutable struct Stats
 
   # operations
   polynomial_additions::Int = 0
-  monomial_additions::Int = 0
+  monomial_additions::Int = 0  # unused
 end
 
 const STATS = ScopedValue(Stats())
@@ -56,8 +55,6 @@ function spoly(f1::T, f2::T, o::MonomialOrdering) where {T<:MPolyRingElem}
   @assert !iszero(f1)
   @assert !iszero(f2)
 
-  inc!(STATS, :s_polynomials)
-
   C = MPolyBuildCtx(parent(f1))
   e1 = lx(f1, o)
   e2 = lx(f2, o)
@@ -68,28 +65,59 @@ function spoly(f1::T, f2::T, o::MonomialOrdering) where {T<:MPolyRingElem}
   # s = l1 * f1 - l2 * f2
   l1 = mul!(l1, f1)
   s = submul!(l1, l2, f2)
-  inc!(STATS, :additions)
+  inc!(STATS, :polynomial_additions)
 
   return s
 end
 
-@doc raw"""
-  add_generator!(G::Vector{T}, R::TrieNode, f::T, o::MonomialOrdering) where {T<:MPolyRingElem}
+function gröbner_basis(I::MPolyIdeal, ordering, elimination, selection; seed::Int=42)
+  elimination_strategy = @match elimination begin
+    ::EliminationStrategy => elimination
+    :none => NoStrategy()
+    :product => ProductCriterion()
+    :gebauer_moeller => GebauerMoellerInstallation()
+    _ => error("invalid elimination strategy $elimination")
+  end
 
-Add $f$ to the generators $G$ and reducers $R$.
-"""
-function add_generator!(
-  G::Vector{T}, R::TrieNode, f::T, o::MonomialOrdering
-) where {T<:MPolyRingElem}
-  @assert !iszero(f)
+  selection_strategy = @match selection begin
+    ::SelectionStrategy => selection
+    :first => FirstStrategy()
+    :last => LastStrategy()
+    :degree => DegreeStrategy()
+    :codegree => CodegreeStrategy()
+    :normal => NormalStrategy()
+    :strange => StrangeStrategy()
+    :sugar => SugarStrategy()
+    :spice => SpiceStrategy()
+    :random => RandomStrategy(seed)
+    :true_degree => TrueDegree()
+    _ => error("invalid selection strategy $selection")
+  end
 
-  # add f to generators G
-  inc!(STATS, :generators)
-  push!(G, f)
+  ring = base_ring(I)
+  monomial_ordering = @match ordering begin
+    ::MonomialOrdering => ordering
+    :lex => lex(ring)
+    :deglex => deglex(ring)
+    :invlex => invlex(ring)
+    :deginvlex => deginvlex(ring)
+    :degrevlex => degrevlex(ring)
+    _ => error("invalid monomial ordering $ordering")
+  end
 
-  # add f to reducers R
-  k = length(G)
-  add_reducer!(R, f, k, o)
+  local stats = Stats()
+  local G
+
+  # use scoped value so we don't have to pass down stats the entire call chain
+  # warning: this is not thread safe, every thread needs its own scope
+  @with STATS => stats begin
+    G = buchberger(
+      I; complete_reduction=false, o=monomial_ordering,
+      elimination_strategy=elimination_strategy, selection_strategy,
+    )
+  end
+
+  return G, stats
 end
 
 @doc raw"""
@@ -119,51 +147,46 @@ function buchberger(
   sizehint!(G, length(I))
 
   R = init_reducers()  # reducers
-  Q = CriticalPair[]  # critical pairs
+  Q = CriticalPair[]  # critical pairs  -- TODO: this could be a sparse bit matrix
 
-  stats = Stats()
+  for g in I
+    iszero(g) && continue
 
-  # use scoped value so we don't have to pass down stats the entire call chain
-  # warning: this is not thread safe, every thread needs its own scope
-  @with STATS => stats begin
-    for g in I
-      iszero(g) && continue
+    g = normalize(g, o)  # TODO: normalize g in place
+    update!(elimination_strategy, Q, G, g, o)  # update the critical pairs
+    push!(G, g) # add g to generators G
+    add_reducer!(R, g, lastindex(G), o) # add g to reducers R
+  end
 
-      # update the critical pairs
-      update!(elimination_strategy, Q, G, g, o)
+  while !isempty(Q)
+    (i, j) = popat!(Q, select(selection_strategy, G, Q, o))
+    s = spoly(G[i], G[j], o)
+    g = reduce!(s, G, R, o; full=true)
 
-      # add g to G and R
-      add_generator!(G, R, g, o)
-    end
-
-    while !isempty(Q)
-      (i, j) = popat!(Q, select(selection_strategy, G, Q, o))
-      s = spoly(G[i], G[j], o)
-      g = reduce!(s, G, R, o; full=true)
-
-      iszero(g) && continue
-
+    if !iszero(g)
       inc!(STATS, :reductions_nonzero)
 
-      # update the critical pairs
-      update!(elimination_strategy, Q, G, g, o)
-
-      # add g to G and R
-      add_generator!(G, R, g, o)
+      g = normalize(g, o)  # TODO: normalize g in place
+      update!(elimination_strategy, Q, G, g, o)  # update the critical pairs
+      push!(G, g) # add g to generators G
+      add_reducer!(R, g, lastindex(G), o) # add g to reducers R
+    else
+      inc!(STATS, :reductions_zero)
     end
-
-    stats.generator_count_pre_reduction = length(G)
-    stats.generator_max_degree_pre_reduction = maximum(degree(g, o) for g in G)
-
-    if complete_reduction
-      # transform G to the reduced Gröbner basis of ⟨G⟩
-      error("interreduction not implemented for current reduction process")
-      # interreduce!(G)
-    end
-
-    stats.generator_count_post_reduction = length(G)
-    stats.generator_max_degree_post_reduction = maximum(degree(g, o) for g in G)
   end
+
+  stats = STATS[]
+  stats.generator_count_pre_reduction = length(G)
+  stats.generator_max_degree_pre_reduction = maximum(degree(g, o) for g in G)
+
+  if complete_reduction
+    # transform G to the reduced Gröbner basis of ⟨G⟩
+    error("interreduction not implemented for current reduction process")
+    # interreduce!(G)
+  end
+
+  stats.generator_count_post_reduction = length(G)
+  stats.generator_max_degree_post_reduction = maximum(degree(g, o) for g in G)
 
   # unbox generators
   S = handle(S)

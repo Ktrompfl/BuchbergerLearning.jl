@@ -1,4 +1,4 @@
-using BufferedStreams, Match, Nemo
+using BufferedStreams, Match, Oscar
 
 function parse_int(io)
   @assert !eof(io)
@@ -82,21 +82,21 @@ function parse_polynomial(io, ctx::MPolyBuildCtx, exp::Vector{Int}, S::Ring)
 end
 
 function parse_ideal(io, ctx::MPolyBuildCtx, exp::Vector{Int}, R::MPolyRing, s::Int)
-  I = Vector{elem_type(R)}(undef, s)
+  gens = Vector{elem_type(R)}(undef, s)
   S = base_ring(R)
 
   for j in 1:s
-    I[j] = parse_polynomial(io, ctx, exp, S)
+    gens[j] = parse_polynomial(io, ctx, exp, S)
     read(io, Char)  # skip delimiter | or line break at end
   end
 
-  return I
+  return ideal(R, gens)
 end
 
 function load_distribution(filename::String, n::Int, d::Int, s::Int)
   K = GF(32003)
   R, _ = polynomial_ring(K, n)
-  D = Vector{Vector{elem_type(R)}}()
+  D = Vector{MPolyIdeal{elem_type(R)}}()
 
   let io = BufferedInputStream(open(filename))
     title = readline(io)
