@@ -141,7 +141,7 @@ function reduce!(
       g = G[i]
 
       # reduce lead term
-      inc!(STATS, :additions)
+      inc!(STATS, :polynomial_additions)
       f = submul!(f, divexact(lt(f, o), lt(g, o)), g)  # TODO: can provide tmp polynomial for efficiency
     end
   end
