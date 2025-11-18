@@ -9,9 +9,9 @@ import Oscar.AbstractAlgebra: MPolyBuildCtx, push_term!, finish, parent_type, el
   base_ring_type,
   base_ring, parent, is_domain_type, is_exact_type, symbols, number_of_variables, gens, gen,
   internal_ordering, degrees, total_degree, is_gen, coefficients, exponent_vectors,
-  characteristic, is_unit, canonical_unit, divides, divexact, remove, valuation, zero!,
-  one!, mul!, add!, sub!, neg!, inv!, addmul!, submul!, coeff, monomial, term, exponent,
-  exponent_vector
+  characteristic, is_unit, canonical_unit, divides, divexact, divrem, div, gcd, lcm, remove,
+  valuation, zero!, one!, mul!, add!, sub!, neg!, inv!, addmul!, submul!, coeff, monomial,
+  term, exponent, exponent_vector
 
 import Oscar: index_of_leading_term, default_ordering
 
@@ -168,6 +168,14 @@ function *(f::ReductionMPoly, g::ReductionMPoly)
   return ReductionMPoly(parent(f), handle(f) * handle(g))
 end
 
+function *(f::ReductionMPoly{T}, c::T) where {T<:RingElem}
+  return ReductionMPoly(parent(f), handle(f) * c)
+end
+
+function *(c::T, f::ReductionMPoly{T}) where {T<:RingElem}
+  return ReductionMPoly(parent(f), c * handle(f))
+end
+
 function ^(f::ReductionMPoly, e::Int)
   return ReductionMPoly(parent(f), handle(f)^e)
 end
@@ -194,6 +202,27 @@ end
 function divexact(f::ReductionMPoly, g::ReductionMPoly; check::Bool=true)
   check_parent(f, g)
   return ReductionMPoly(parent(f), divexact(handle(f), handle(g); check=check))
+end
+
+function divrem(f::ReductionMPoly, g::ReductionMPoly)
+  check_parent(f, g)
+  (q, r) = divrem(handle(f), handle(g))
+  return (ReductionMPoly(parent(f), q), ReductionMPoly(parent(f), r))
+end
+
+function div(f::ReductionMPoly, g::ReductionMPoly)
+  check_parent(f, g)
+  return ReductionMPoly(parent(f), div(handle(f), handle(g)))
+end
+
+function gcd(f::ReductionMPoly, g::ReductionMPoly)
+  check_parent(f, g)
+  return ReductionMPoly(parent(f), gcd(handle(f), handle(g)))
+end
+
+function lcm(f::ReductionMPoly, g::ReductionMPoly)
+  check_parent(f, g)
+  return ReductionMPoly(parent(f), lcm(handle(f), handle(g)))
 end
 
 function remove(f::ReductionMPoly, g::ReductionMPoly)
